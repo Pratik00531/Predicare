@@ -14,30 +14,62 @@ from typing import Optional
 import logging
 import asyncio
 from functools import lru_cache
+from datetime import datetime
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 # Import our AI doctor components
 from brain_of_the_doctor import analyze_image_with_query, encode_image
 from voice_of_the_doctor import text_to_speech_with_gtts, text_to_speech_with_elevenlabs
 from voice_of_the_patient import transcribe_with_groq, record_audio
+from auth_service import OTPService, EmailService, FirebaseAuthService
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Initialize Email Service for OTP
+email_service = EmailService()
+
+# Initialize Firebase Admin
+try:
+    firebase_creds_path = os.getenv('FIREBASE_CREDENTIALS_PATH', './firebase-credentials.json')
+    if os.path.exists(firebase_creds_path):
+        # Check if Firebase app already exists (prevents double initialization on reload)
+        try:
+            firebase_admin.get_app()
+            db = firestore.client()
+            logger.info("✅ Firebase Firestore already initialized")
+        except ValueError:
+            # App doesn't exist, initialize it
+            cred = credentials.Certificate(firebase_creds_path)
+            firebase_admin.initialize_app(cred, {
+                'projectId': os.getenv('FIREBASE_PROJECT_ID'),
+            })
+            db = firestore.client()
+            logger.info("✅ Firebase Firestore initialized successfully")
+    else:
+        db = None
+        logger.warning("⚠️ Firebase credentials not found - running without database persistence")
+except Exception as e:
+    db = None
+    logger.warning(f"⚠️ Firebase initialization failed: {e} - running without database")
+
 # CONVERSATION STATE MANAGEMENT (Critical for clinical safety)
 # Stores case context to prevent context collapse
 conversation_state = {}
+
 
 class CaseContext:
     """
     Locks clinical context once a case begins.
     Prevents context collapse and symptom drift.
-    Implements dynamic re-prioritization and severity scoring.
+    Implements THREE-TIER urgency system: EMERGENCY, URGENT, ROUTINE
     """
     def __init__(self, session_id: str, initial_symptoms: str):
         self.session_id = session_id
         self.initial_symptoms = initial_symptoms
-        self.emergency_level = "none"
+        self.urgency_tier = "routine"  # Changed from emergency_level
         self.organ_system = None
         self.symptom_history = [initial_symptoms]
         self.locked = True
@@ -59,16 +91,29 @@ class CaseContext:
         
         # Calculate initial severity
         self._calculate_severity(initial_symptoms)
-        
-    def is_emergency(self):
-        return self.emergency_level in ["critical", "urgent"]
     
-    def set_emergency(self, level: str):
-        """Emergency state is ONE-WAY - can only escalate, never de-escalate"""
-        if level == "critical":
-            self.emergency_level = "critical"
-        elif level == "urgent" and self.emergency_level != "critical":
-            self.emergency_level = "urgent"
+    def is_emergency(self):
+        """True only for RED tier emergencies (call 911)"""
+        return self.urgency_tier == "emergency"
+    
+    def is_urgent(self):
+        """True for AMBER tier (same-day evaluation needed)"""
+        return self.urgency_tier == "urgent"
+    
+    def is_routine(self):
+        """True for GREEN tier (monitor or schedule)"""
+        return self.urgency_tier == "routine"
+    
+    def set_urgency(self, tier: str):
+        """Urgency can only escalate: routine → urgent → emergency"""
+        tier_priority = {"routine": 0, "urgent": 1, "emergency": 2}
+        current_priority = tier_priority.get(self.urgency_tier, 0)
+        new_priority = tier_priority.get(tier, 0)
+        
+        if new_priority > current_priority:
+            old_tier = self.urgency_tier
+            self.urgency_tier = tier
+            logger.warning(f"⚠️ Urgency escalated: {old_tier.upper()} → {tier.upper()}")
         # Intentionally no way to go back to "none"
     
     def is_user_acknowledging(self, text: str) -> bool:
@@ -103,55 +148,103 @@ class CaseContext:
     
     def _calculate_severity(self, text: str):
         """
-        SEVERITY SCORING SYSTEM
-        Replaces narrative severity with computed scores
+        PATTERN-BASED SEVERITY ASSESSMENT with THREE-TIER URGENCY
+        
+        EMERGENCY (RED) = Immediate life threat - Call 911
+        URGENT (AMBER) = Same-day evaluation needed - ER or urgent care
+        ROUTINE (GREEN) = Monitor or schedule appointment
         """
         text_lower = text.lower()
         self.severity_score = 0
         self.severity_factors = {}
         
-        # Sudden onset symptoms (+2)
-        if any(kw in text_lower for kw in ["sudden", "suddenly", "acute", "abrupt"]):
-            self.severity_score += 2
-            self.severity_factors["sudden_onset"] = 2
-            
-        # Fever (+1)
-        if any(kw in text_lower for kw in ["fever", "temperature", "hot", "chills"]):
-            self.severity_score += 1
-            self.severity_factors["fever"] = 1
-            
-        # Neurological symptoms (+3)
-        if any(kw in text_lower for kw in ["headache", "confusion", "weakness", "numbness", "seizure", "neck stiffness", "vision", "speech"]):
+        # ===== EMERGENCY TIER (RED) - Immediate life threat =====
+        # Severe cardiac symptoms
+        if any(kw in text_lower for kw in ["chest pain", "chest pressure", "crushing", "tight chest"]) and \
+           any(kw in text_lower for kw in ["arm", "jaw", "shoulder", "radiating", "sweating", "dizzy"]):
+            self.severity_score += 7
+            self.severity_factors["cardiac_emergency"] = 7
+            self.set_urgency("emergency")
+            logger.critical("🚨 EMERGENCY: Cardiac symptoms detected")
+        
+        # Severe breathing distress
+        if any(kw in text_lower for kw in ["can't breathe", "gasping", "suffocating", "turning blue", "lips blue"]):
+            self.severity_score += 7
+            self.severity_factors["respiratory_emergency"] = 7
+            self.set_urgency("emergency")
+            logger.critical("🚨 EMERGENCY: Severe respiratory distress")
+        
+        # Severe trauma
+        if any(kw in text_lower for kw in ["car accident", "fell from height", "hit by car", "stabbed", "shot", "severe bleeding"]):
+            self.severity_score += 7
+            self.severity_factors["severe_trauma"] = 7
+            self.set_urgency("emergency")
+            logger.critical("🚨 EMERGENCY: Severe trauma detected")
+        
+        # Stroke symptoms
+        if any(kw in text_lower for kw in ["face drooping", "arm weakness", "slurred speech", "sudden confusion"]):
+            self.severity_score += 7
+            self.severity_factors["stroke_symptoms"] = 7
+            self.set_urgency("emergency")
+            logger.critical("🚨 EMERGENCY: Possible stroke")
+        
+        # ===== URGENT TIER (AMBER) - Same-day evaluation =====
+        # Appendicitis pattern: RLQ pain + anorexia + nausea ± fever
+        if any(kw in text_lower for kw in ["right lower", "rlq", "right side abdomen", "right abdomen"]):
+            if any(kw in text_lower for kw in ["nausea", "nauseous", "feel sick"]) and \
+               any(kw in text_lower for kw in ["appetite", "don't want to eat", "can't eat", "not hungry", "anorexia"]):
+                self.severity_score += 5
+                self.severity_factors["appendicitis_pattern"] = 5
+                self.set_urgency("urgent")
+                logger.warning("⚠️ URGENT: Appendicitis pattern detected - same-day evaluation needed")
+        
+        # Peritonitis signs
+        if any(kw in text_lower for kw in ["abdom", "stomach", "belly"]) and \
+           any(kw in text_lower for kw in ["guard", "rigid", "hard", "board-like", "rebound"]):
+            self.severity_score += 6
+            self.severity_factors["peritonitis_signs"] = 6
+            self.set_urgency("urgent")
+            logger.warning("⚠️ URGENT: Peritonitis signs")
+        
+        # Sudden severe localized pain
+        if ("sudden" in text_lower or "abrupt" in text_lower) and \
+           ("severe" in text_lower or "worst" in text_lower) and \
+           any(kw in text_lower for kw in ["right", "left", "upper", "lower", "quadrant"]):
+            self.severity_score += 4
+            self.severity_factors["acute_localized_pain"] = 4
+            self.set_urgency("urgent")
+        
+        # Neurological deficits (not stroke-level)
+        neuro_keywords = ["weakness", "numbness", "tingling", "vision changes", "seizure", "neck stiff"]
+        if any(kw in text_lower for kw in neuro_keywords):
+            self.severity_score += 4
+            self.severity_factors["neurological_symptoms"] = 4
+            self.set_urgency("urgent")
+        
+        # Persistent vomiting
+        if any(kw in text_lower for kw in ["vomiting", "throwing up", "can't keep"]) and \
+           any(kw in text_lower for kw in ["hours", "all day", "constant", "won't stop"]):
             self.severity_score += 3
-            self.severity_factors["neurological"] = 3
-            
-        # Trauma (+3)
-        if any(kw in text_lower for kw in ["trauma", "injury", "accident", "fall", "hit", "struck"]):
-            self.severity_score += 3
-            self.severity_factors["trauma"] = 3
-            
-        # Vomiting (+1)
-        if any(kw in text_lower for kw in ["vomit", "vomiting", "throwing up"]):
+            self.severity_factors["persistent_vomiting"] = 3
+            self.set_urgency("urgent")
+        
+        # ===== ROUTINE TIER (GREEN) - Monitor or schedule =====
+        # Fever (alone, not high)
+        if "fever" in text_lower or "temperature" in text_lower:
+            if any(kw in text_lower for kw in ["104", "105", "very high", "103"]):
+                self.severity_score += 2
+                self.severity_factors["high_fever"] = 2
+                self.set_urgency("urgent")
+            else:
+                self.severity_score += 1
+                self.severity_factors["fever"] = 1
+        
+        # Vomiting (not persistent)
+        if ("vomit" in text_lower or "throwing up" in text_lower) and self.severity_score == 0:
             self.severity_score += 1
             self.severity_factors["vomiting"] = 1
-            
-        # Chest pain (+3)
-        if any(kw in text_lower for kw in ["chest pain", "crushing", "radiating"]):
-            self.severity_score += 3
-            self.severity_factors["chest_pain"] = 3
-            
-        # Breathing difficulty (+2)
-        if any(kw in text_lower for kw in ["can't breathe", "difficulty breathing", "shortness of breath", "dyspnea"]):
-            self.severity_score += 2
-            self.severity_factors["breathing_difficulty"] = 2
-            
-        # Update emergency level based on score
-        if self.severity_score >= 5:
-            self.set_emergency("critical")
-        elif self.severity_score >= 3:
-            self.set_emergency("urgent")
-            
-        logger.info(f"Severity score: {self.severity_score}, Factors: {self.severity_factors}")
+        
+        logger.info(f"Severity: {self.severity_score} | Urgency tier: {self.urgency_tier.upper()} | Factors: {self.severity_factors}")
     
     def _update_severity(self, text: str):
         """Update severity score with new information"""
@@ -224,7 +317,7 @@ class CaseContext:
         """
         if self.is_emergency() and self.diagnostic_certainty > 0.7:
             return True
-        if self.emergency_level == "critical":
+        if self.urgency_tier == "emergency":
             return True
         return False
     
@@ -271,6 +364,59 @@ class CaseContext:
             self.organ_system = new_system
             return True
         return self.organ_system == new_system
+    
+    def to_dict(self) -> dict:
+        """Convert CaseContext to dictionary for Firestore storage"""
+        return {
+            "sessionId": self.session_id,
+            "initialSymptoms": self.initial_symptoms,
+            "emergencyLevel": self.urgency_tier,
+            "urgencyTier": self.urgency_tier,
+            "organSystem": self.organ_system,
+            "symptomHistory": self.symptom_history,
+            "severityScore": self.severity_score,
+            "severityFactors": self.severity_factors,
+            "riskWeights": self.risk_weights,
+            "diagnosticCertainty": self.diagnostic_certainty,
+            "emergencyShown": self.emergency_shown,
+            "emergencyRepeatCount": self.emergency_repeat_count,
+            "createdAt": firestore.SERVER_TIMESTAMP,
+            "updatedAt": firestore.SERVER_TIMESTAMP
+        }
+    
+    def save_to_firestore(self, user_id: str = "anonymous"):
+        """Persist conversation state to Firestore"""
+        if db is None:
+            return  # Skip if Firestore not initialized
+        
+        try:
+            doc_ref = db.collection('users').document(user_id).collection('conversations').document(self.session_id)
+            doc_ref.set(self.to_dict(), merge=True)
+            logger.info(f"💾 Saved conversation {self.session_id} to Firestore")
+        except Exception as e:
+            logger.error(f"❌ Failed to save to Firestore: {e}")
+    
+    def save_message_to_firestore(self, user_id: str, role: str, content: str):
+        """Save individual message to Firestore"""
+        if db is None:
+            return
+        
+        try:
+            message_ref = (db.collection('users').document(user_id)
+                          .collection('conversations').document(self.session_id)
+                          .collection('messages').document())
+            
+            message_ref.set({
+                "role": role,
+                "content": content,
+                "timestamp": firestore.SERVER_TIMESTAMP,
+                "emergencyLevel": self.urgency_tier,
+                "urgencyTier": self.urgency_tier,
+                "severityScore": self.severity_score
+            })
+            logger.info(f"💬 Saved message to Firestore")
+        except Exception as e:
+            logger.error(f"❌ Failed to save message: {e}")
 
 # Rule-based emergency detection (override AI response)
 EMERGENCY_KEYWORDS = {
@@ -489,53 +635,194 @@ async def convert_speech_to_text(
         logger.error(f"Error transcribing audio: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
 
+def detect_symptoms_in_message(text: str) -> bool:
+    """
+    INTENT DETECTION: Simple heuristics to detect if message contains symptoms
+    No ML needed - pattern matching is sufficient and safer
+    """
+    text_lower = text.lower().strip()
+    
+    # BODY PARTS (strong symptom indicator)
+    body_parts = [
+        "head", "chest", "stomach", "abdomen", "back", "neck", "throat", "arm", "leg",
+        "eye", "ear", "nose", "mouth", "skin", "heart", "lung", "kidney", "liver",
+        "brain", "foot", "hand", "shoulder", "knee", "ankle", "joint", "muscle"
+    ]
+    
+    # SYMPTOM KEYWORDS (direct symptom language)
+    symptoms = [
+        "pain", "ache", "hurt", "sore", "fever", "temperature", "bleeding", "blood",
+        "swelling", "swollen", "rash", "itch", "cough", "vomit", "nausea", "dizzy",
+        "weak", "tired", "fatigue", "breathe", "breathing", "shortness", "numb",
+        "tingling", "burning", "sharp", "dull", "throbbing", "cramping", "stiff"
+    ]
+    
+    # TIME INDICATORS (symptom duration/onset)
+    time_words = [
+        "since", "for", "started", "began", "sudden", "suddenly", "days", "hours",
+        "weeks", "ago", "yesterday", "morning", "night", "continuous", "intermittent"
+    ]
+    
+    # SEVERITY INDICATORS (symptom intensity)
+    severity_words = [
+        "severe", "mild", "moderate", "intense", "extreme", "unbearable", "sharp",
+        "crushing", "radiating", "constant", "worse", "better", "spreading"
+    ]
+    
+    # Check if message contains symptom indicators
+    has_body_part = any(bp in text_lower for bp in body_parts)
+    has_symptom = any(sym in text_lower for sym in symptoms)
+    has_time = any(tw in text_lower for tw in time_words)
+    has_severity = any(sw in text_lower for sw in severity_words)
+    
+    # Scoring: Higher confidence = more indicators present
+    symptom_score = sum([has_body_part, has_symptom, has_time, has_severity])
+    
+    # Symptoms detected if score >= 2 OR has explicit symptom word
+    return symptom_score >= 2 or has_symptom
+
+
+def is_greeting_message(text: str) -> bool:
+    """Detect if message is just a greeting (no symptoms)"""
+    text_lower = text.lower().strip()
+    greetings = [
+        "hi", "hello", "hey", "greetings", "good morning", "good afternoon",
+        "good evening", "what's up", "sup", "yo"
+    ]
+    # Pure greeting if it's ONLY a greeting phrase (short message)
+    return text_lower in greetings or (len(text_lower) < 20 and any(g in text_lower for g in greetings))
+
+
+def is_vague_message(text: str) -> bool:
+    """Detect vague/unclear messages that need clarification"""
+    text_lower = text.lower().strip()
+    vague_phrases = [
+        "not feeling well", "feeling bad", "feeling sick", "something wrong",
+        "need help", "i'm sick", "im sick", "don't feel good", "something feels off"
+    ]
+    return any(vp in text_lower for vp in vague_phrases)
+
+
 @app.post("/api/chat")
 async def chat_with_ai_doctor(
     message: str = Form(...),
     session_id: str = Form(default="default"),
-    include_voice: bool = Form(default=False)
+    user_id: str = Form(default="anonymous"),
+    include_voice: bool = Form(default=False),
+    # User profile data (optional)
+    age: int = Form(default=None),
+    gender: str = Form(default=None),
+    height: int = Form(default=None),  # cm
+    weight: int = Form(default=None),  # kg
+    medical_conditions: str = Form(default=None),
+    medications: str = Form(default=None),
+    allergies: str = Form(default=None)
 ):
     """
-    Medical consultation with conversation state management
+    Medical consultation with ADAPTIVE SYMPTOM INTAKE + conversation state management
+    Now includes user profile data for personalized assessment
     """
     try:
         # CASE LOCKING: Check if this is a new case or continuation
         is_new_case = session_id not in conversation_state
         
         if is_new_case:
-            # Initialize new case context
+            # INTENT DETECTION: Determine user's message type
+            has_symptoms = detect_symptoms_in_message(message)
+            is_greeting = is_greeting_message(message)
+            is_vague = is_vague_message(message)
+            
+            # 🟢 STATE A: ORIENTATION (Greeting or vague, no symptoms)
+            if is_greeting and not has_symptoms:
+                orientation_response = """Hello.
+I can help you understand your symptoms and guide you on next steps.
+
+Please describe what you're experiencing in your own words. You don't need to be medical — just explain what feels wrong."""
+                
+                return {
+                    "success": True,
+                    "response": orientation_response,
+                    "emergency": False,
+                    "session_id": session_id,
+                    "state": "orientation",
+                    "symptoms_detected": False
+                }
+            
+            # 🟠 STATE C: VAGUE SYMPTOMS (Needs clarification)
+            elif is_vague and not has_symptoms:
+                clarification_response = """I understand.
+To help you better, could you tell me what symptoms you're noticing? For example, pain, fever, breathing issues, or anything else concerning."""
+                
+                return {
+                    "success": True,
+                    "response": clarification_response,
+                    "emergency": False,
+                    "session_id": session_id,
+                    "state": "clarification",
+                    "symptoms_detected": False
+                }
+            
+            # 🟡 STATE B: DIRECT SYMPTOM INTAKE (Symptoms detected)
+            # Initialize case context ONLY if symptoms are present
             case_context = CaseContext(session_id, message)
             case_context.organ_system = case_context.detect_organ_system(message)
+            case_context.symptoms_detected = True  # Flag to track symptom presence
             conversation_state[session_id] = case_context
-            logger.info(f"New case started: {session_id}, Organ system: {case_context.organ_system}")
+            logger.info(f"New case started: {session_id}, Organ system: {case_context.organ_system}, Symptoms: YES")
+            
+            # Save initial state to Firestore
+            case_context.save_to_firestore(user_id)
         else:
             # Continuing existing case
             case_context = conversation_state[session_id]
-            case_context.add_follow_up(message)
-            logger.info(f"Continuing case: {session_id}, Emergency: {case_context.emergency_level}")
-        
-        # RULE-BASED EMERGENCY DETECTION (Override AI)
-        emergency_status = detect_emergency(message if is_new_case else case_context.initial_symptoms)
-        
-        # EMERGENCY STATE PERSISTENCE: One-way only
-        case_context.set_emergency(emergency_status["level"])
-        emergency_status = detect_emergency(message)
-        
-        # TIERED EMERGENCY RESPONSE SYSTEM
-        if case_context.is_emergency():
-            emergency_level = case_context.emergency_level
             
+            # Check if this is the FIRST message with symptoms (user clarified after greeting)
+            if not hasattr(case_context, 'symptoms_detected') or not case_context.symptoms_detected:
+                has_symptoms_now = detect_symptoms_in_message(message)
+                
+                if has_symptoms_now:
+                    # User just provided symptoms - initialize properly
+                    case_context.initial_symptoms = message
+                    case_context.symptom_history = [message]
+                    case_context.organ_system = case_context.detect_organ_system(message)
+                    case_context.symptoms_detected = True
+                    case_context._calculate_severity(message)
+                    logger.info(f"Symptoms now detected in session {session_id}")
+                else:
+                    # Still no symptoms - keep asking for clarification
+                    clarification_response = """I'd like to help, but I need more information about your symptoms.
+
+Could you describe what you're feeling? For example:
+• What hurts or feels wrong?
+• Where in your body is it?
+• When did it start?"""
+                    
+                    return {
+                        "success": True,
+                        "response": clarification_response,
+                        "emergency": False,
+                        "session_id": session_id,
+                        "state": "awaiting_symptoms",
+                        "symptoms_detected": False
+                    }
+            
+            case_context.add_follow_up(message)
+            logger.info(f"Continuing case: {session_id}, Urgency tier: {case_context.urgency_tier}")
+        
+        # Save user message to Firestore
+        case_context.save_message_to_firestore(user_id, "user", message)
+        
+        # TIERED EMERGENCY RESPONSE SYSTEM (only for true emergencies)
+        if case_context.is_emergency():
             # 🟥 FIRST EMERGENCY MESSAGE (Full detailed response)
             if not case_context.emergency_shown:
                 case_context.emergency_shown = True
-                emergency_response = f"""🚨 {'CRITICAL ' if emergency_level == 'critical' else 'URGENT '}MEDICAL SITUATION 🚨
+                emergency_response = f"""🚨 EMERGENCY - CALL 911 IMMEDIATELY 🚨
 
 **ORIGINAL SYMPTOMS:** {case_context.initial_symptoms}
 
-**EMERGENCY STATUS:** This case was flagged as {emergency_level.upper()} and remains in emergency status.
-
 **IMMEDIATE ACTION REQUIRED:**
-{'Call your local emergency number or go to the nearest emergency department immediately.' if emergency_level == 'critical' else 'Seek medical attention within 24 hours.'}
+Call 911 or go to the nearest emergency room immediately.
 
 This situation requires immediate professional medical evaluation. Follow-up questions or additional information do NOT change the emergency status. Only a healthcare professional can clear this status after in-person evaluation.
 
@@ -544,7 +831,7 @@ This is a medical information assistant. This assessment does not replace emerge
             
             # 🟨 USER ACKNOWLEDGES ("I'm going", "Ok")
             elif case_context.is_user_acknowledging(message):
-                emergency_response = """Understood. Please go to the nearest emergency department immediately.
+                emergency_response = """Understood. Please call 911 or go to the nearest emergency room immediately.
 
 This situation should not be delayed."""
             
@@ -571,11 +858,16 @@ Please seek immediate in-person medical care now.
 
 I cannot assist further until you are evaluated by a healthcare professional."""
             
+            # Save emergency response to Firestore
+            case_context.save_message_to_firestore(user_id, "assistant", emergency_response)
+            case_context.save_to_firestore(user_id)
+            
             return {
                 "success": True,
                 "response": emergency_response,
                 "emergency": True,
-                "emergency_level": emergency_level,
+                "urgency_tier": "emergency",
+                "emergency_level": "emergency",
                 "session_id": session_id,
                 "message_received": message
             }
@@ -589,67 +881,180 @@ I cannot assist further until you are evaluated by a healthcare professional."""
         risk_weight_explanation = case_context.get_risk_weight_explanation()
         suppress_questions = case_context.should_suppress_questions()
         
-        system_prompt = f"""You are a medical information assistant (NOT a doctor). Your responses must follow this EXACT structure:
+        # Determine if this is first response to symptoms (affects greeting)
+        is_first_symptom_response = len(case_context.symptom_history) == 1
+        
+        # Build patient profile context
+        patient_context = ""
+        if age or gender or height or weight:
+            patient_context = "\n**PATIENT PROFILE:**"
+            if age:
+                patient_context += f"\n• Age: {age} years"
+            if gender:
+                patient_context += f"\n• Gender: {gender.capitalize()}"
+            if height and weight:
+                bmi = weight / ((height/100) ** 2)
+                patient_context += f"\n• BMI: {bmi:.1f} (Height: {height}cm, Weight: {weight}kg)"
+            if medical_conditions:
+                patient_context += f"\n• Medical History: {medical_conditions}"
+            if medications:
+                patient_context += f"\n• Current Medications: {medications}"
+            if allergies:
+                patient_context += f"\n• Allergies: {allergies}"
+            patient_context += "\n\nIMPORTANT: Use this patient data to refine differential diagnosis and assess risk factors."
+        
+        system_prompt = f"""You are a medical symptom assessment assistant.
+Your primary responsibility is patient safety and correct clinical prioritization.
 
-**CLINICAL CONTEXT (LOCKED):**
+You do NOT diagnose.
+You do NOT provide probability percentages.
+You do NOT provide reassurance when surgical or time-sensitive conditions are possible.
+
+––––––––––––––––––––
+CORE CLINICAL RULES
+––––––––––––––––––––
+
+1. NEVER assign numeric probabilities (e.g., 80%, 5%).
+   Use only qualitative ranking:
+   - Most likely
+   - Possible
+   - Must be ruled out urgently
+
+2. NEVER classify a case as "low severity" if it matches a known high-risk clinical pattern,
+   even if individual symptoms appear mild.
+
+3. SEVERITY SCORE MUST NOT OVERRIDE PATTERN-BASED RISK.
+   Pattern recognition always has higher priority than symptom scoring.
+
+––––––––––––––––––––
+APPENDICITIS OVERRIDE RULE (MANDATORY)
+––––––––––––––––––––
+
+If ALL of the following are present:
+- Abdominal pain localized to the right lower quadrant (RLQ)
+- Loss of appetite (anorexia)
+- Nausea or vomiting
+
+AND ANY of the following:
+- Fever (even low-grade)
+- Pain progression or localization
+- Worsening pain over time
+
+THEN:
+- Appendicitis MUST be ranked as a HIGH-PRIORITY concern
+- Case MUST be classified as URGENT
+- User MUST be advised to seek prompt in-person medical evaluation
+- Reassuring language is PROHIBITED
+
+Under these conditions:
+- Gastroenteritis MUST NOT be ranked higher than appendicitis
+- "Low severity" labels are NOT allowed
+
+––––––––––––––––––––
+SURGICAL RED FLAG RULES (GLOBAL)
+––––––––––––––––––––
+
+The following findings automatically increase urgency,
+regardless of overall severity score:
+
+- Localized abdominal pain (especially RLQ)
+- Loss of appetite with abdominal pain
+- Pain that localizes or migrates
+- Abdominal pain with fever
+- Abdominal pain with nausea or vomiting
+
+If any surgical red flag is present:
+- Do NOT provide home-care reassurance
+- Do NOT minimize the condition
+- Do NOT delay evaluation
+
+––––––––––––––––––––
+DIFFERENTIAL DIAGNOSIS ORDERING
+––––––––––––––––––––
+
+When generating differentials:
+1. Rank conditions by clinical danger and time sensitivity first
+2. Rank common but less dangerous conditions second
+3. Explicitly state when a serious condition must be ruled out
+
+Example ordering:
+- Primary concern: condition that must be ruled out urgently
+- Other possible causes: less dangerous explanations
+- Do NOT bury serious conditions at the bottom
+
+––––––––––––––––––––
+USER-FACING RESPONSE STRUCTURE
+––––––––––––––––––––
+
+All responses MUST follow this structure:
+
+1. SUMMARY (1–2 lines)
+   - State concern level clearly
+   - Avoid reassurance if red flags exist
+
+2. PRIMARY CONCERN
+   - Name the condition that must be ruled out
+   - Briefly explain why, using symptom pattern
+
+3. OTHER POSSIBILITIES
+   - Mention alternatives without minimizing the primary concern
+
+4. ACTION
+   - Clear guidance on urgency based on tier:
+     * EMERGENCY tier: "Call 911 immediately" or "Go to emergency room now"
+     * URGENT tier: "Seek medical evaluation today" (not "within 24 hours")
+     * ROUTINE tier: "Monitor symptoms" or "Schedule appointment if worsening"
+   - No probabilities
+   - No "wait and see" if red flags are present
+
+––––––––––––––––––––
+PROHIBITED BEHAVIOR
+––––––––––––––––––––
+
+- Do NOT say "low severity" in the presence of surgical patterns
+- Do NOT provide percentage likelihoods
+- Do NOT speculate about BMI, lifestyle, or irrelevant demographics
+- Do NOT provide false reassurance
+- Do NOT overwhelm with internal reasoning or scoring details
+
+––––––––––––––––––––
+SAFETY PRINCIPLE
+––––––––––––––––––––
+
+If uncertain between a benign explanation and a potentially serious one:
+ALWAYS prioritize ruling out the serious condition.
+
+––––––––––––––––––––
+CLINICAL CONTEXT
+––––––––––––––––––––
+{patient_context}
+
 Original symptoms: {case_context.initial_symptoms}
 Organ system: {case_context.organ_system}
 Severity score: {case_context.severity_score} ({', '.join([f'{k}={v}' for k, v in case_context.severity_factors.items()])})
-{'Follow-up responses: ' + ' | '.join(case_context.symptom_history[1:]) if len(case_context.symptom_history) > 1 else 'This is the initial consultation.'}
+Urgency tier: {case_context.urgency_tier.upper()}
 
-CRITICAL SAFETY RULES:
-1. Base ALL assessment on ORIGINAL symptoms above - NO reinterpretation
-2. Follow-ups can ONLY confirm/deny/clarify original symptoms
-3. NEVER introduce new symptoms (no chest pain, burning, dysphagia unless user stated)
-4. NEVER switch organ systems (locked to {case_context.organ_system})
-5. Be SPECIFIC - avoid overgeneral claims (e.g., "trauma increases infection risk" is TOO VAGUE)
+{"🚨 EMERGENCY (RED) - Call 911 immediately" if case_context.urgency_tier == "emergency" else "⚠️ URGENT (AMBER) - Same-day evaluation needed" if case_context.urgency_tier == "urgent" else "✓ ROUTINE (GREEN) - Monitor or schedule"}
 
-**SUMMARY** (1-2 sentences, defensible)
-[Brief assessment with severity score justification: "Based on severity score of {case_context.severity_score}, this is [categorization]..."]
+**OUTPUT FORMAT** (Keep responses SHORT and ACTIONABLE):
 
-**MOST LIKELY EXPLANATION**
-"The most consistent explanation for [exact original symptoms] is [condition], which typically presents with [be specific about mechanism, not just listing symptoms]."
+{"**GREETING**" if is_first_symptom_response else ""}
+{"Thank you for sharing your symptoms." if is_first_symptom_response else ""}
 
-**OTHER CONDITIONS CONSIDERED** (Ranked by probability)
-{risk_weight_explanation if risk_weight_explanation else ""}
-• Most likely (probability ~X%): [Condition] - [specific reason based on original symptoms]
-• Less likely (probability ~Y%): [Condition] - [why less probable - be precise]
-• Rare but serious (probability ~Z%): [Condition] - [cannot be excluded because...]
+**SUMMARY**
+[1-2 sentences: Concern level and what pattern suggests]
 
-{"**DIFFERENTIAL RANKING EXPLANATION**" if risk_weight_explanation else ""}
-{risk_weight_explanation if risk_weight_explanation else ""}
+**PRIMARY CONCERN**
+[Condition name] — [One sentence: why this pattern matches]
 
-**ORGAN SYSTEM CONSISTENCY:**
-All differentials above remain within {case_context.organ_system} pathology. Cross-system diagnoses are explicitly excluded.
+**OTHER POSSIBILITIES**
+• [Alternative] — [Brief reasoning]
+• [If applicable] — [Brief reasoning]
 
-**DEMOGRAPHIC CONSIDERATIONS**
-[ONLY if age/sex mentioned: explain specific relevance. If uncertain, state uncertainty instead of making vague claims]
+**ACTION**
+{f"Call 911 immediately or go to the nearest emergency room." if case_context.urgency_tier == "emergency" else f"Seek medical evaluation today at an urgent care or emergency department." if case_context.urgency_tier == "urgent" else "[Monitor symptoms and schedule appointment if worsening or persistent]"}
 
-**WHAT MAKES THIS {"SERIOUS" if case_context.severity_score >= 3 else "NON-SERIOUS"}**
-Severity score {case_context.severity_score}: {', '.join([f'{k} (+{v})' for k, v in case_context.severity_factors.items()])}
-[Explain why this score translates to urgency level]
-
-{"**IMMEDIATE ESCALATION REQUIRED - NO FURTHER QUESTIONS**" if suppress_questions else "**FOLLOW-UP QUESTIONS**"}
-{'''Professional evaluation is required immediately. Do not attempt further self-assessment.''' if suppress_questions else '''(Maximum 3 decisive questions - SKIP if emergency locked)
-"To refine the assessment:"
-1. [Specific yes/no question about original symptom characteristic]
-2. [Timeline question about original symptom progression]
-3. [Risk factor question directly relevant to top differential]
-
-DO NOT ask questions already answered. Tracked questions: ''' + str(list(case_context.asked_questions)) if not suppress_questions else ''}
-
-**CLEAR ACTION**
-[Based on severity score: ≥5=immediate ER, 3-4=urgent care within hours, <3=monitor/schedule appointment]
-
-**BOUNDARY STATEMENT**
-"I am a medical information assistant. This information does not replace professional medical evaluation."
-
-HARD GATES (ONE VIOLATION = FAIL):
-❌ NEVER add symptoms user didn't state
-❌ NEVER make overgeneral medical claims without specificity
-❌ NEVER switch organ systems
-❌ NEVER ask redundant questions
-❌ NEVER use narrative severity - always reference computed score"""
+**DISCLAIMER:** This is not a diagnosis. Professional evaluation is required."""
         
         # Build context-aware message for AI
         if is_new_case:
@@ -681,11 +1086,18 @@ HARD GATES (ONE VIOLATION = FAIL):
             "]+", flags=re.UNICODE)
         ai_response = emoji_pattern.sub(r'', ai_response)
         
+        # Save AI response to Firestore
+        case_context.save_message_to_firestore(user_id, "assistant", ai_response)
+        
+        # Update conversation state in Firestore
+        case_context.save_to_firestore(user_id)
+        
         result = {
             "success": True,
             "response": ai_response,
-            "emergency": False,
-            "emergency_level": None,
+            "emergency": case_context.is_emergency(),  # Boolean for backward compatibility
+            "urgency_tier": case_context.urgency_tier,  # NEW: Three-tier system
+            "emergency_level": case_context.urgency_tier,  # Alias for compatibility
             "session_id": session_id,
             "message_received": message,
             "severity_score": case_context.severity_score,
@@ -717,12 +1129,15 @@ async def health_check():
         # Check if required environment variables are set
         groq_api_key = os.environ.get("GROQ_API_KEY")
         eleven_api_key = os.environ.get("ELEVEN_API_KEY")
+        smtp_configured = bool(os.environ.get("SMTP_EMAIL") and os.environ.get("SMTP_PASSWORD"))
         
         return {
             "status": "healthy",
             "components": {
                 "groq_api": "configured" if groq_api_key else "missing_key",
                 "elevenlabs_api": "configured" if eleven_api_key else "missing_key",
+                "firestore": "connected" if db else "not_configured",
+                "email_otp": "configured" if smtp_configured else "dev_mode",
                 "image_analysis": "available",
                 "speech_to_text": "available",
                 "text_to_speech": "available",
@@ -733,11 +1148,369 @@ async def health_check():
                 "/api/text-to-speech", 
                 "/api/speech-to-text",
                 "/api/chat",
+                "/api/conversations",
+                "/api/conversation/{session_id}",
+                "/api/auth/send-otp",
+                "/api/auth/verify-otp",
+                "/api/auth/signup-with-otp",
+                "/api/auth/resend-otp",
+                "/api/auth/check-email",
                 "/api/health"
             ]
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+@app.get("/api/conversations")
+async def get_user_conversations(user_id: str = "anonymous"):
+    """Get all conversations for a user"""
+    if db is None:
+        raise HTTPException(status_code=503, detail="Firestore not configured")
+    
+    try:
+        conversations_ref = db.collection('users').document(user_id).collection('conversations')
+        conversations = conversations_ref.order_by('createdAt', direction=firestore.Query.DESCENDING).stream()
+        
+        result = []
+        for conv in conversations:
+            data = conv.to_dict()
+            result.append({
+                "sessionId": data.get("sessionId"),
+                "initialSymptoms": data.get("initialSymptoms"),
+                "emergencyLevel": data.get("emergencyLevel"),
+                "severityScore": data.get("severityScore"),
+                "createdAt": data.get("createdAt"),
+                "updatedAt": data.get("updatedAt")
+            })
+        
+        return {"success": True, "conversations": result}
+    except Exception as e:
+        logger.error(f"Failed to fetch conversations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/conversation/{session_id}")
+async def get_conversation_details(session_id: str, user_id: str = "anonymous"):
+    """Get full conversation details including messages"""
+    if db is None:
+        raise HTTPException(status_code=503, detail="Firestore not configured")
+    
+    try:
+        # Get conversation metadata
+        conv_ref = db.collection('users').document(user_id).collection('conversations').document(session_id)
+        conv_doc = conv_ref.get()
+        
+        if not conv_doc.exists:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        
+        # Get all messages
+        messages_ref = conv_ref.collection('messages').order_by('timestamp')
+        messages = messages_ref.stream()
+        
+        message_list = []
+        for msg in messages:
+            msg_data = msg.to_dict()
+            message_list.append({
+                "role": msg_data.get("role"),
+                "content": msg_data.get("content"),
+                "timestamp": msg_data.get("timestamp"),
+                "emergencyLevel": msg_data.get("emergencyLevel"),
+                "severityScore": msg_data.get("severityScore")
+            })
+        
+        return {
+            "success": True,
+            "conversation": conv_doc.to_dict(),
+            "messages": message_list
+        }
+    except Exception as e:
+        logger.error(f"Failed to fetch conversation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== AUTHENTICATION ENDPOINTS ====================
+
+@app.post("/api/auth/send-otp")
+async def send_otp(email: str = Form(...)):
+    """
+    Send OTP to user's email for verification
+    Used for signup and login
+    """
+    try:
+        # Validate email format
+        if '@' not in email or '.' not in email:
+            raise HTTPException(status_code=400, detail="Invalid email format")
+        
+        # Generate OTP
+        otp = OTPService.generate_otp()
+        
+        # Store OTP
+        OTPService.store_otp(email, otp)
+        
+        # Send OTP via email
+        success = email_service.send_otp_email(email, otp)
+        
+        if success:
+            return {
+                "success": True,
+                "message": f"OTP sent to {email}. Please check your inbox.",
+                "expiresIn": f"{10} minutes"
+            }
+        else:
+            # In development mode without SMTP, OTP is logged to console
+            return {
+                "success": True,
+                "message": f"OTP sent (check server logs for dev mode)",
+                "expiresIn": f"{10} minutes",
+                "devMode": True
+            }
+    
+    except Exception as e:
+        logger.error(f"Failed to send OTP: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/auth/verify-otp")
+async def verify_otp(email: str = Form(...), otp: str = Form(...)):
+    """
+    Verify OTP entered by user
+    Returns success status and message
+    """
+    try:
+        # Verify OTP
+        success, message = OTPService.verify_otp(email, otp)
+        
+        if success:
+            # Mark email as verified in Firebase (if user exists)
+            firebase_user = FirebaseAuthService.get_user_by_email(email)
+            if firebase_user:
+                FirebaseAuthService.verify_email_in_firebase(email)
+            
+            return {
+                "success": True,
+                "message": message,
+                "email": email,
+                "verified": True
+            }
+        else:
+            return {
+                "success": False,
+                "message": message,
+                "verified": False
+            }
+    
+    except Exception as e:
+        logger.error(f"OTP verification failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/auth/signup-with-otp")
+async def signup_with_otp(
+    email: str = Form(...),
+    password: str = Form(...),
+    displayName: str = Form(...),
+    otp: str = Form(...)
+):
+    """
+    Complete signup after OTP verification
+    Creates Firebase user account
+    """
+    try:
+        # First verify OTP
+        success, message = OTPService.verify_otp(email, otp)
+        
+        if not success:
+            raise HTTPException(status_code=400, detail=message)
+        
+        # Check if user already exists
+        existing_user = FirebaseAuthService.get_user_by_email(email)
+        if existing_user:
+            raise HTTPException(status_code=400, detail="User already exists with this email")
+        
+        # Create Firebase user
+        result = FirebaseAuthService.create_user_with_email(email, password, displayName)
+        
+        if result['success']:
+            # Mark as verified since OTP was confirmed
+            FirebaseAuthService.verify_email_in_firebase(email)
+            
+            return {
+                "success": True,
+                "message": "Account created successfully!",
+                "uid": result['uid'],
+                "email": result['email']
+            }
+        else:
+            raise HTTPException(status_code=400, detail=result['error'])
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Signup failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/auth/resend-otp")
+async def resend_otp(email: str = Form(...)):
+    """
+    Resend OTP if user didn't receive or it expired
+    """
+    try:
+        # Clean up old OTP
+        if email in OTPService.otp_store:
+            del OTPService.otp_store[email]
+        
+        # Generate new OTP
+        otp = OTPService.generate_otp()
+        OTPService.store_otp(email, otp)
+        
+        # Send new OTP
+        success = email_service.send_otp_email(email, otp)
+        
+        return {
+            "success": True,
+            "message": f"New OTP sent to {email}",
+            "expiresIn": f"{10} minutes"
+        }
+    
+    except Exception as e:
+        logger.error(f"Failed to resend OTP: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/auth/check-email")
+async def check_email_exists(email: str):
+    """
+    Check if email already exists in Firebase
+    Used to determine if user should login or signup
+    """
+    try:
+        user = FirebaseAuthService.get_user_by_email(email)
+        
+        if user:
+            return {
+                "exists": True,
+                "email_verified": user['email_verified'],
+                "display_name": user.get('display_name')
+            }
+        else:
+            return {
+                "exists": False
+            }
+    
+    except Exception as e:
+        return {
+            "exists": False
+        }
+
+@app.post("/api/auth/login")
+async def login(
+    email: str = Form(...),
+    password: str = Form(...)
+):
+    """
+    Login with email and password
+    Note: Firebase Admin SDK cannot verify passwords directly,
+    so we return user data if account exists. Frontend should use Firebase Client SDK for actual password verification.
+    """
+    try:
+        # Check if user exists
+        user = FirebaseAuthService.get_user_by_email(email)
+        
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+        # Check if email is verified
+        if not user['email_verified']:
+            raise HTTPException(status_code=403, detail="Email not verified. Please verify your email first.")
+        
+        # Return user data
+        # NOTE: In production, frontend should use Firebase Client SDK to verify password
+        # Firebase Admin SDK does not have password verification capability
+        return {
+            "success": True,
+            "message": "User authenticated",
+            "user": {
+                "uid": user['uid'],
+                "email": user['email'],
+                "displayName": user.get('display_name'),
+                "emailVerified": user['email_verified']
+            }
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/auth/forgot-password")
+async def forgot_password(email: str = Form(...)):
+    """
+    Send password reset OTP to user's email
+    """
+    try:
+        # Check if user exists
+        user = FirebaseAuthService.get_user_by_email(email)
+        
+        if not user:
+            # Don't reveal if email exists for security
+            return {
+                "success": True,
+                "message": "If an account exists with this email, you will receive a password reset code."
+            }
+        
+        # Generate OTP for password reset
+        otp = OTPService.generate_otp()
+        OTPService.store_otp(email, otp)
+        
+        # Send OTP via email
+        success = email_service.send_password_reset_email(email, otp)
+        
+        return {
+            "success": True,
+            "message": "If an account exists with this email, you will receive a password reset code.",
+            "expiresIn": f"{10} minutes"
+        }
+    
+    except Exception as e:
+        logger.error(f"Forgot password failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/auth/reset-password")
+async def reset_password(
+    email: str = Form(...),
+    otp: str = Form(...),
+    new_password: str = Form(...)
+):
+    """
+    Reset password using OTP verification
+    """
+    try:
+        # Verify OTP
+        success, message = OTPService.verify_otp(email, otp)
+        
+        if not success:
+            raise HTTPException(status_code=400, detail=message)
+        
+        # Check if user exists
+        user = FirebaseAuthService.get_user_by_email(email)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Reset password in Firebase
+        reset_success = FirebaseAuthService.reset_password(email, new_password)
+        
+        if reset_success:
+            return {
+                "success": True,
+                "message": "Password reset successfully! You can now login with your new password."
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to reset password")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Password reset failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+        logger.error(f"Failed to fetch conversation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     # Run the server

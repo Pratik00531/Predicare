@@ -40,6 +40,8 @@ const ProfilePage = () => {
   const { user, isLoggedIn, updateProfile } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(false);
+  
+  // Initialize profile with user's display name from Firebase
   const [profile, setProfile] = useState<UserProfile>({
     firstName: '',
     lastName: '',
@@ -163,9 +165,17 @@ const ProfilePage = () => {
           ...parsedProfile,
           email: user?.email || parsedProfile.email
         });
-      } else if (user?.email) {
-        // Set email from auth context
-        setProfile(prev => ({ ...prev, email: user.email }));
+      } else if (user) {
+        // Initialize with user data from Firebase Auth
+        const displayName = user.displayName || '';
+        const nameParts = displayName.split(' ');
+        
+        setProfile(prev => ({ 
+          ...prev, 
+          email: user.email || '',
+          firstName: nameParts[0] || '',
+          lastName: nameParts.slice(1).join(' ') || ''
+        }));
       }
     };
     
@@ -248,7 +258,7 @@ const ProfilePage = () => {
               </div>
               <div>
                 <h1 className="text-2xl font-bold text-gray-800">
-                  {profile.firstName || 'Your'} Health Profile
+                  {profile.firstName ? `${profile.firstName}'s Health Profile` : 'Your Health Profile'}
                 </h1>
                 <p className="text-gray-600">Manage your health information and preferences</p>
               </div>

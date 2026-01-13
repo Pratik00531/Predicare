@@ -32,3 +32,4 @@ temp_*
 .vscode/*
 !.vscode/extensions.json
 .idea
+AI Doctor/firebase-credentials.json

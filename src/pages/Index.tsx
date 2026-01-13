@@ -1,148 +1,192 @@
-import React from 'react';
-import { Link } from 'react-router-dom';
-import Header from '../components/Header';
-import Hero from '../components/Hero';
-import AIDoctorConsole from '../components/AIDoctorConsole';
-import { useAuth } from '@/contexts/AuthContext';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Stethoscope } from 'lucide-react';
+import { Link } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { Header } from "@/components/layout/Header";
+import { Footer } from "@/components/layout/Footer";
+import { Shield, Clock, MapPin, Lock } from "lucide-react";
+import heroImage from "@/assets/hero-healthcare.jpg";
 
-const Index = () => {
-  const { isLoggedIn, user } = useAuth();
-  
+const features = [
+  {
+    icon: Shield,
+    title: "Clinical Accuracy",
+    description:
+      "Our symptom assessment is built on evidence-based clinical guidelines and regularly validated by healthcare professionals.",
+  },
+  {
+    icon: Clock,
+    title: "24/7 Availability",
+    description:
+      "Access reliable health guidance whenever you need it, day or night, from any device.",
+  },
+  {
+    icon: MapPin,
+    title: "Care Navigation",
+    description:
+      "Find nearby healthcare providers, specialists, and emergency services based on your location and needs.",
+  },
+  {
+    icon: Lock,
+    title: "Privacy First",
+    description:
+      "Your health data is encrypted, protected, and never shared without your explicit consent.",
+  },
+];
+
+const steps = [
+  {
+    number: "01",
+    title: "Describe Your Symptoms",
+    description:
+      "Tell us what you're experiencing using our structured symptom assessment interface.",
+  },
+  {
+    number: "02",
+    title: "Receive Guidance",
+    description:
+      "Get evidence-based information about potential causes and recommended next steps.",
+  },
+  {
+    number: "03",
+    title: "Connect with Care",
+    description:
+      "Find appropriate healthcare providers or emergency services when needed.",
+  },
+];
+
+export default function Index() {
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50">
+    <div className="min-h-screen flex flex-col bg-background">
       <Header />
-      <main>
-        <Hero />
-        
-        {/* Authentication & Profile Status */}
-        {isLoggedIn && !user?.profileCompleted && (
-          <section className="py-4 bg-green-50">
-            <div className="container mx-auto px-4">
-              <Alert className="max-w-4xl mx-auto border-green-200 bg-green-50">
-                <Stethoscope className="h-4 w-4 text-green-600" />
-                <AlertDescription className="text-green-800">
-                  <strong>Welcome!</strong> Complete your health profile to unlock personalized AI recommendations.
-                  <Link to="/profile" className="underline font-medium ml-2">
-                    Complete your profile now →
-                  </Link>
-                </AlertDescription>
-              </Alert>
-            </div>
-          </section>
-        )}
 
-        {/* AI Doctor Console - Main Feature */}
-        <section id="ai-doctor" className="py-20 bg-white/50">
-          <div className="container mx-auto px-4">
-            <div className="text-center mb-16">
-              <h2 className="text-4xl font-bold text-gray-800 mb-4">
-                Your Personal <span className="bg-gradient-to-r from-blue-600 to-green-600 bg-clip-text text-transparent">AI Doctor</span>
+      <main className="flex-1">
+        {/* Hero Section */}
+        <section className="relative">
+          <div className="absolute inset-0">
+            <img
+              src={heroImage}
+              alt="Healthcare professionals in clinical setting"
+              className="w-full h-full object-cover"
+            />
+            <div className="absolute inset-0 bg-foreground/70" />
+          </div>
+
+          <div className="relative clinical-container py-24 lg:py-32">
+            <div className="max-w-2xl">
+              <h1 className="text-4xl lg:text-5xl font-semibold text-primary-foreground leading-tight mb-6">
+                Trusted Health Guidance When You Need It
+              </h1>
+              <p className="text-lg text-primary-foreground/80 mb-8 leading-relaxed">
+                Predicare helps you understand your symptoms with clinical accuracy, 
+                guiding you to the right level of care while protecting your privacy.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-4">
+                <Button variant="hero" size="xl" asChild>
+                  <Link to="/signup">Get Started</Link>
+                </Button>
+                <Button
+                  variant="hero-outline"
+                  size="xl"
+                  className="border-primary-foreground text-primary-foreground hover:bg-primary-foreground hover:text-foreground"
+                  asChild
+                >
+                  <Link to="/#how-it-works">How It Works</Link>
+                </Button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Features Section */}
+        <section id="features" className="clinical-section bg-background">
+          <div className="clinical-container">
+            <div className="text-center mb-12">
+              <h2 className="text-3xl font-semibold text-foreground mb-4">
+                Built for Clinical Trust
               </h2>
-              <p className="text-xl text-gray-600 max-w-3xl mx-auto">
-                Experience advanced medical consultation with our AI-powered doctor featuring medical image analysis, 
-                voice responses, and comprehensive health assessments.
+              <p className="text-muted-foreground max-w-2xl mx-auto">
+                Predicare combines advanced technology with rigorous clinical standards 
+                to provide health guidance you can rely on.
               </p>
             </div>
-            
-            {/* AI Doctor Console */}
-            <div className="max-w-6xl mx-auto">
-              <AIDoctorConsole />
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {features.map((feature) => {
+                const Icon = feature.icon;
+                return (
+                  <div
+                    key={feature.title}
+                    className="p-6 border border-border rounded-lg bg-card"
+                  >
+                    <div className="w-12 h-12 rounded-md bg-secondary flex items-center justify-center mb-4">
+                      <Icon className="h-6 w-6 text-primary" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-foreground mb-2">
+                      {feature.title}
+                    </h3>
+                    <p className="text-sm text-muted-foreground leading-relaxed">
+                      {feature.description}
+                    </p>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </section>
 
         {/* How It Works Section */}
-        <section className="py-16 bg-gray-50">
-          <div className="container mx-auto px-4">
+        <section id="how-it-works" className="clinical-section bg-surface-elevated">
+          <div className="clinical-container">
             <div className="text-center mb-12">
-              <h2 className="text-3xl font-bold text-gray-800 mb-4">How It Works</h2>
-              <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-                Get started with AI-powered medical consultation in three simple steps.
+              <h2 className="text-3xl font-semibold text-foreground mb-4">
+                How Predicare Works
+              </h2>
+              <p className="text-muted-foreground max-w-2xl mx-auto">
+                A straightforward process designed to get you the information and 
+                care you need efficiently.
               </p>
             </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-4xl mx-auto">
-              <div className="text-center">
-                <div className="w-16 h-16 bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <span className="text-2xl font-bold text-white">1</span>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+              {steps.map((step) => (
+                <div key={step.number} className="relative">
+                  <div className="text-5xl font-semibold text-border mb-4">
+                    {step.number}
+                  </div>
+                  <h3 className="text-xl font-semibold text-foreground mb-2">
+                    {step.title}
+                  </h3>
+                  <p className="text-muted-foreground leading-relaxed">
+                    {step.description}
+                  </p>
                 </div>
-                <h3 className="text-xl font-semibold text-gray-800 mb-2">Describe or Upload</h3>
-                <p className="text-gray-600">
-                  Type your symptoms or upload a medical image for analysis by the AI Doctor.
-                </p>
-              </div>
-              
-              <div className="text-center">
-                <div className="w-16 h-16 bg-purple-500 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <span className="text-2xl font-bold text-white">2</span>
-                </div>
-                <h3 className="text-xl font-semibold text-gray-800 mb-2">AI Analysis</h3>
-                <p className="text-gray-600">
-                  Our advanced AI Doctor processes your input using state-of-the-art medical knowledge.
-                </p>
-              </div>
-              
-              <div className="text-center">
-                <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <span className="text-2xl font-bold text-white">3</span>
-                </div>
-                <h3 className="text-xl font-semibold text-gray-800 mb-2">Get Consultation</h3>
-                <p className="text-gray-600">
-                  Receive detailed medical insights and recommendations with optional voice responses.
-                </p>
-              </div>
+              ))}
             </div>
           </div>
         </section>
 
-        {/* Features Showcase */}
-        <section className="py-16 bg-gradient-to-r from-indigo-500 to-purple-600">
-          <div className="container mx-auto px-4">
-            <div className="text-center text-white mb-12">
-              <h2 className="text-3xl font-bold mb-4">Powered by Advanced AI</h2>
-              <p className="text-xl text-indigo-100 max-w-2xl mx-auto">
-                Our AI Doctor integrates cutting-edge medical AI technologies for comprehensive healthcare assistance.
-              </p>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
-              <div className="bg-white/10 backdrop-blur-sm rounded-lg p-6 text-center text-white">
-                <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center mx-auto mb-4">
-                  🩺
-                </div>
-                <h3 className="text-lg font-semibold mb-2">Medical Consultation</h3>
-                <p className="text-sm text-indigo-100">
-                  Comprehensive medical consultations with AI-powered diagnosis and recommendations.
-                </p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm rounded-lg p-6 text-center text-white">
-                <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center mx-auto mb-4">
-                  🔊
-                </div>
-                <h3 className="text-lg font-semibold mb-2">Voice Responses</h3>
-                <p className="text-sm text-indigo-100">
-                  High-quality voice synthesis for natural AI doctor responses and consultations.
-                </p>
-              </div>
-              
-              <div className="bg-white/10 backdrop-blur-sm rounded-lg p-6 text-center text-white">
-                <div className="w-12 h-12 bg-white/20 rounded-lg flex items-center justify-center mx-auto mb-4">
-                  📸
-                </div>
-                <h3 className="text-lg font-semibold mb-2">Image Analysis</h3>
-                <p className="text-sm text-indigo-100">
-                  AI-powered medical image analysis for skin conditions, X-rays, and health assessments.
-                </p>
-              </div>
-            </div>
+        {/* CTA Section */}
+        <section id="about" className="clinical-section bg-primary">
+          <div className="clinical-container text-center">
+            <h2 className="text-3xl font-semibold text-primary-foreground mb-4">
+              Start Your Health Assessment
+            </h2>
+            <p className="text-primary-foreground/80 max-w-xl mx-auto mb-8">
+              Join thousands of users who trust Predicare for reliable health guidance. 
+              Your privacy and wellbeing are our priority.
+            </p>
+            <Button
+              variant="hero"
+              size="xl"
+              className="bg-primary-foreground text-primary hover:bg-primary-foreground/90"
+              asChild
+            >
+              <Link to="/signup">Create Free Account</Link>
+            </Button>
           </div>
         </section>
       </main>
+
+      <Footer />
     </div>
   );
-};
-
-export default Index;
+}
