@@ -122,6 +122,12 @@ export default function Signup() {
     setIsLoading(true);
     setError("");
 
+    // Add timeout to prevent hanging forever
+    const timeout = setTimeout(() => {
+      setIsLoading(false);
+      setError("Request timed out. Please check your internet connection and try again.");
+    }, 15000); // 15 second timeout
+
     try {
       // Use Firebase Auth directly - no backend needed for signup
       const { createUserWithEmailAndPassword, updateProfile } = await import('firebase/auth');
@@ -129,12 +135,15 @@ export default function Signup() {
       const { doc, setDoc } = await import('firebase/firestore');
       const { db } = await import('@/lib/firebase-service');
 
-      // Create Firebase user
-      const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        formData.email,
-        formData.password
-      );
+      // Create Firebase user with timeout protection
+      const userCredential = await Promise.race([
+        createUserWithEmailAndPassword(auth, formData.email, formData.password),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Firebase Auth timeout')), 10000)
+        )
+      ]) as any;
+
+      clearTimeout(timeout); // Clear the main timeout
 
       // Update profile with display name
       await updateProfile(userCredential.user, {
@@ -143,15 +152,20 @@ export default function Signup() {
 
       // Create user profile in Firestore (try but don't fail if it errors)
       try {
-        await setDoc(doc(db, 'users', userCredential.user.uid), {
-          uid: userCredential.user.uid,
-          email: formData.email,
-          displayName: `${formData.firstName} ${formData.lastName}`,
-          firstName: formData.firstName,
-          lastName: formData.lastName,
-          createdAt: new Date(),
-          updatedAt: new Date()
-        });
+        await Promise.race([
+          setDoc(doc(db, 'users', userCredential.user.uid), {
+            uid: userCredential.user.uid,
+            email: formData.email,
+            displayName: `${formData.firstName} ${formData.lastName}`,
+            firstName: formData.firstName,
+            lastName: formData.lastName,
+            createdAt: new Date(),
+            updatedAt: new Date()
+          }),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Firestore timeout')), 5000)
+          )
+        ]);
         console.log('✅ User profile created in Firestore');
       } catch (firestoreError: any) {
         console.warn('⚠️ Could not create Firestore profile:', firestoreError);
@@ -162,6 +176,7 @@ export default function Signup() {
       navigate("/app");
       
     } catch (error: any) {
+      clearTimeout(timeout); // Make sure to clear timeout on error too
       console.error('Signup error:', error);
       console.error('Error code:', error.code);
       console.error('Error message:', error.message);
@@ -175,6 +190,8 @@ export default function Signup() {
         setError("Invalid email address.");
       } else if (error.code === 'permission-denied' || error.message?.includes('permission')) {
         setError("Database permission error. Please contact support or try again later.");
+      } else if (error.message === 'Firebase Auth timeout' || error.message === 'Firestore timeout') {
+        setError("Connection timeout. Please check your internet connection and disable any ad blockers or VPN.");
       } else {
         setError(`Failed to create account: ${error.message || 'Please try again.'}`);
       }
