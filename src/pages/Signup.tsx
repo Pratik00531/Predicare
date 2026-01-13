@@ -141,25 +141,30 @@ export default function Signup() {
         displayName: `${formData.firstName} ${formData.lastName}`
       });
 
-      // Create user profile in Firestore
-      await setDoc(doc(db, 'users', userCredential.user.uid), {
-        uid: userCredential.user.uid,
-        email: formData.email,
-        displayName: `${formData.firstName} ${formData.lastName}`,
-        firstName: formData.firstName,
-        lastName: formData.lastName,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      });
-
-      // Send verification email (Firebase handles this automatically)
-      // await sendEmailVerification(userCredential.user);
+      // Create user profile in Firestore (try but don't fail if it errors)
+      try {
+        await setDoc(doc(db, 'users', userCredential.user.uid), {
+          uid: userCredential.user.uid,
+          email: formData.email,
+          displayName: `${formData.firstName} ${formData.lastName}`,
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+        console.log('✅ User profile created in Firestore');
+      } catch (firestoreError: any) {
+        console.warn('⚠️ Could not create Firestore profile:', firestoreError);
+        // Continue anyway - user is authenticated
+      }
 
       // Success! Navigate to app
       navigate("/app");
       
     } catch (error: any) {
       console.error('Signup error:', error);
+      console.error('Error code:', error.code);
+      console.error('Error message:', error.message);
       
       // Handle specific Firebase errors
       if (error.code === 'auth/email-already-in-use') {
@@ -168,8 +173,10 @@ export default function Signup() {
         setError("Password is too weak. Please use at least 6 characters.");
       } else if (error.code === 'auth/invalid-email') {
         setError("Invalid email address.");
+      } else if (error.code === 'permission-denied' || error.message?.includes('permission')) {
+        setError("Database permission error. Please contact support or try again later.");
       } else {
-        setError("Failed to create account. Please try again.");
+        setError(`Failed to create account: ${error.message || 'Please try again.'}`);
       }
     } finally {
       setIsLoading(false);
