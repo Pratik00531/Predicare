@@ -227,8 +227,8 @@ class EmailService:
             message.attach(part1)
             message.attach(part2)
             
-            # Send email
-            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
+            # Send email with timeout
+            with smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=10) as server:
                 server.starttls()
                 server.login(self.smtp_email, self.smtp_password)
                 server.send_message(message)

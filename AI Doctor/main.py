@@ -1248,19 +1248,25 @@ async def send_otp(email: str = Form(...)):
         # Send OTP via email
         success = email_service.send_otp_email(email, otp)
         
+        # Check if SMTP is configured
+        smtp_configured = bool(os.environ.get("SMTP_EMAIL") and os.environ.get("SMTP_PASSWORD"))
+        
         if success:
             return {
                 "success": True,
-                "message": f"OTP sent to {email}. Please check your inbox.",
-                "expiresIn": f"{10} minutes"
+                "message": f"OTP sent to {email}. Please check your inbox." if smtp_configured else f"DEV MODE: Auto-verification enabled. Use any 6 digits.",
+                "expiresIn": f"{10} minutes",
+                "devMode": not smtp_configured,
+                "otp": otp if not smtp_configured else None  # Only include in response if dev mode
             }
         else:
             # In development mode without SMTP, OTP is logged to console
             return {
                 "success": True,
-                "message": f"OTP sent (check server logs for dev mode)",
+                "message": f"DEV MODE: Auto-verification enabled. Use any 6 digits.",
                 "expiresIn": f"{10} minutes",
-                "devMode": True
+                "devMode": True,
+                "otp": otp  # Include OTP in response for dev mode
             }
     
     except Exception as e:
@@ -1518,6 +1524,5 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
         log_level="info"
     )

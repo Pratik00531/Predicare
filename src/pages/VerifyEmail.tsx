@@ -10,6 +10,8 @@ export default function VerifyEmail() {
   const navigate = useNavigate();
   const location = useLocation();
   const email = location.state?.email || "";
+  const devMode = location.state?.devMode || false;
+  const devOTP = location.state?.otp || sessionStorage.getItem('devOTP') || "";
   
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [loading, setLoading] = useState(false);
@@ -24,7 +26,17 @@ export default function VerifyEmail() {
     if (!email) {
       navigate('/signup');
     }
-  }, [email, navigate]);
+    
+    // Auto-fill OTP in dev mode
+    if (devMode && devOTP && devOTP.length === 6) {
+      const digits = devOTP.split('');
+      setOtp(digits);
+      // Auto-verify after a short delay
+      setTimeout(() => {
+        verifyOTP(devOTP);
+      }, 500);
+    }
+  }, [email, navigate, devMode, devOTP]);
 
   // Countdown timer
   useEffect(() => {

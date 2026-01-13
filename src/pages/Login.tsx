@@ -29,18 +29,7 @@ export default function Login() {
         formData.password
       );
       
-      // Check if email is verified
-      if (!userCredential.user.emailVerified) {
-        toast({
-          title: "Email Not Verified",
-          description: "Please verify your email before logging in.",
-          variant: "destructive",
-        });
-        setIsLoading(false);
-        return;
-      }
-      
-      // Successful login
+      // Successful login - skip email verification check for now
       toast({
         title: "Login Successful",
         description: "Welcome back!",

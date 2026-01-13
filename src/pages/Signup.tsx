@@ -36,30 +36,54 @@ export default function Signup() {
     setError("");
 
     try {
-      // Send OTP to user's email
-      const otpFormData = new FormData();
-      otpFormData.append('email', formData.email);
+      // Use Firebase Auth directly - no backend needed for signup
+      const { createUserWithEmailAndPassword, updateProfile } = await import('firebase/auth');
+      const { auth } = await import('@/lib/firebase-service');
+      const { doc, setDoc } = await import('firebase/firestore');
+      const { db } = await import('@/lib/firebase-service');
 
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/auth/send-otp`, {
-        method: 'POST',
-        body: otpFormData,
+      // Create Firebase user
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        formData.email,
+        formData.password
+      );
+
+      // Update profile with display name
+      await updateProfile(userCredential.user, {
+        displayName: `${formData.firstName} ${formData.lastName}`
       });
 
-      const data = await response.json();
+      // Create user profile in Firestore
+      await setDoc(doc(db, 'users', userCredential.user.uid), {
+        uid: userCredential.user.uid,
+        email: formData.email,
+        displayName: `${formData.firstName} ${formData.lastName}`,
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
 
-      if (data.success) {
-        // Store signup data and navigate to verify email page with OTP
-        sessionStorage.setItem('pendingSignup', JSON.stringify({
-          ...formData,
-          displayName: `${formData.firstName} ${formData.lastName}`
-        }));
-        navigate("/verify-email", { state: { email: formData.email } });
-      } else {
-        setError(data.message || "Failed to send verification code. Please try again.");
-      }
-    } catch (error) {
+      // Send verification email (Firebase handles this automatically)
+      // await sendEmailVerification(userCredential.user);
+
+      // Success! Navigate to app
+      navigate("/app");
+      
+    } catch (error: any) {
       console.error('Signup error:', error);
-      setError("Network error. Please check your connection and try again.");
+      
+      // Handle specific Firebase errors
+      if (error.code === 'auth/email-already-in-use') {
+        setError("This email is already registered. Please sign in instead.");
+      } else if (error.code === 'auth/weak-password') {
+        setError("Password is too weak. Please use at least 6 characters.");
+      } else if (error.code === 'auth/invalid-email') {
+        setError("Invalid email address.");
+      } else {
+        setError("Failed to create account. Please try again.");
+      }
     } finally {
       setIsLoading(false);
     }
