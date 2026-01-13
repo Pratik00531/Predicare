@@ -112,7 +112,7 @@ export default function VerifyEmail() {
       formData.append('displayName', signupData.displayName);
       formData.append('otp', otpCode);
 
-      const response = await fetch('http://localhost:8000/api/auth/signup-with-otp', {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/auth/signup-with-otp`, {
         method: 'POST',
         body: formData,
       });
@@ -149,7 +149,7 @@ export default function VerifyEmail() {
       const formData = new FormData();
       formData.append('email', email);
 
-      const response = await fetch('http://localhost:8000/api/auth/resend-otp', {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/auth/resend-otp`, {
         method: 'POST',
         body: formData,
       });

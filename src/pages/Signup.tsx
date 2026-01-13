@@ -40,7 +40,7 @@ export default function Signup() {
       const otpFormData = new FormData();
       otpFormData.append('email', formData.email);
 
-      const response = await fetch('http://localhost:8000/api/auth/send-otp', {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/auth/send-otp`, {
         method: 'POST',
         body: otpFormData,
       });

@@ -232,7 +232,7 @@ export default function Chat() {
       if (profileData.medications) formData.append("medications", profileData.medications);
       if (profileData.allergies) formData.append("allergies", profileData.allergies);
 
-      const response = await fetch("http://localhost:8000/api/chat", {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/chat`, {
         method: "POST",
         body: formData,
       });

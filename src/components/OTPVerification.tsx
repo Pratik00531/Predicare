@@ -101,7 +101,7 @@ const OTPVerification: React.FC<OTPVerificationProps> = ({
       formData.append('email', email);
       formData.append('otp', otpCode);
 
-      const response = await fetch('http://localhost:8000/api/auth/verify-otp', {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/auth/verify-otp`, {
         method: 'POST',
         body: formData,
       });
@@ -136,7 +136,7 @@ const OTPVerification: React.FC<OTPVerificationProps> = ({
       const formData = new FormData();
       formData.append('email', email);
 
-      const response = await fetch('http://localhost:8000/api/auth/resend-otp', {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/auth/resend-otp`, {
         method: 'POST',
         body: formData,
       });

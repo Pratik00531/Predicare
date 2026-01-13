@@ -27,7 +27,7 @@ export default function ForgotPassword() {
       const formData = new FormData();
       formData.append("email", email);
 
-      const response = await fetch("http://localhost:8000/api/auth/forgot-password", {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/auth/forgot-password`, {
         method: "POST",
         body: formData,
       });
@@ -97,7 +97,7 @@ export default function ForgotPassword() {
       formData.append("otp", otp);
       formData.append("new_password", newPassword);
 
-      const response = await fetch("http://localhost:8000/api/auth/reset-password", {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/auth/reset-password`, {
         method: "POST",
         body: formData,
       });
