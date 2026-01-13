@@ -45,55 +45,6 @@ export default function ForgotPassword() {
       setIsLoading(false);
     }
   };
-    }
-
-    if (newPassword.length < 6) {
-      toast({
-        title: "Password Too Short",
-        description: "Password must be at least 6 characters long.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setIsLoading(true);
-
-    try {
-      const formData = new FormData();
-      formData.append("email", email);
-      formData.append("otp", otp);
-      formData.append("new_password", newPassword);
-
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/auth/reset-password`, {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to reset password");
-      }
-
-      toast({
-        title: "Success!",
-        description: "Password reset successfully. You can now login.",
-      });
-
-      setTimeout(() => {
-        navigate("/login");
-      }, 1500);
-    } catch (error: any) {
-      console.error("Reset password error:", error);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to reset password. Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-blue-50 to-white p-4">
@@ -171,49 +122,6 @@ export default function ForgotPassword() {
             </div>
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-                  id="newPassword"
-                  name="newPassword"
-                  type="password"
-                  required
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Enter new password"
-                  className="mt-1"
-                  minLength={6}
-                />
-              </div>
-              <div>
-                <Label htmlFor="confirmPassword">Confirm Password</Label>
-                <Input
-                  id="confirmPassword"
-                  name="confirmPassword"
-                  type="password"
-                  required
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Confirm new password"
-                  className="mt-1"
-                  minLength={6}
-                />
-              </div>
-            </div>
-
-            <Button type="submit" className="w-full" disabled={isLoading}>
-              {isLoading ? "Resetting..." : "Reset Password"}
-            </Button>
-          </form>
-        )}
-
-        <div className="mt-6 p-4 bg-amber-50 border border-amber-200 rounded-lg">
-          <p className="text-xs text-gray-600">
-            <strong>Security Note:</strong> The verification code expires in 10 minutes.
-            {step === "verify" && " Don't share this code with anyone."}
-          </p>
-        </div>
       </div>
     </div>
   );
