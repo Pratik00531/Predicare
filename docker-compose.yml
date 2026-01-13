@@ -1,39 +1,19 @@
-# Docker Compose for full stack deployment
 version: '3.8'
 
 services:
-  # Backend API Service
   backend:
-    build: 
-      context: ./AI Doctor
-      dockerfile: Dockerfile
+    build: ./AI Doctor
     ports:
       - "8000:8000"
     environment:
       - GROQ_API_KEY=${GROQ_API_KEY}
       - ELEVEN_API_KEY=${ELEVEN_API_KEY}
-    volumes:
-      - ./AI Doctor:/app
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
-  # Frontend Service (Nginx serving built React app)
   frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
+    build: .
     ports:
       - "80:80"
-      - "443:443"
     depends_on:
       - backend
     restart: unless-stopped
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-
-volumes:
-  ai_doctor_data:

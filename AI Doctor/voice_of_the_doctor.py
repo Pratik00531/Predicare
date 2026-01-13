@@ -21,12 +21,21 @@ input_text="Hi this is Pratik"
 #text_to_speech_with_gtts_old(input_text=input_text, output_filepath="gtts_testing.mp3")
 
 #Step1b: Setup Text to Speech–TTS–model with ElevenLabs
-import elevenlabs
-from elevenlabs.client import ElevenLabs
+# Import elevenlabs only if available
+try:
+    import elevenlabs
+    from elevenlabs.client import ElevenLabs
+    ELEVENLABS_AVAILABLE = True
+except ImportError:
+    ELEVENLABS_AVAILABLE = False
+    print("⚠️ elevenlabs not installed - only gTTS voice available")
 
 ELEVENLABS_API_KEY=os.environ.get("ELEVENLABS_API_KEY")
 
 def text_to_speech_with_elevenlabs_old(input_text, output_filepath):
+    if not ELEVENLABS_AVAILABLE:
+        print("⚠️ elevenlabs not installed, using gTTS")
+        return text_to_speech_with_gtts(input_text, output_filepath)
     client=ElevenLabs(api_key=ELEVENLABS_API_KEY)
     audio=client.generate(
         text= input_text,
@@ -76,6 +85,10 @@ def text_to_speech_with_elevenlabs(input_text, output_filepath):
     Falls back to gTTS if ElevenLabs fails
     """
     try:
+        if not ELEVENLABS_AVAILABLE:
+            print("⚠️ elevenlabs not installed, using gTTS instead")
+            return text_to_speech_with_gtts(input_text, output_filepath)
+            
         if not ELEVENLABS_API_KEY:
             print("⚠️ ElevenLabs API key not found, using gTTS instead")
             return text_to_speech_with_gtts(input_text, output_filepath)

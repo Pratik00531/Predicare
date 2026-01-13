@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { MessageCircle, Mic, MicOff, Upload, Image, Send, Loader2, Volume2, Stethoscope } from 'lucide-react';
+import { MessageCircle, Mic, MicOff, Upload, Image, Send, Loader2, Volume2, Stethoscope, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -9,21 +9,24 @@ import { Badge } from '@/components/ui/badge';
 
 interface Message {
   id: string;
-  type: 'user' | 'doctor' | 'system';
+  type: 'user' | 'doctor' | 'system' | 'emergency';
   content: string;
   timestamp: Date;
   audioUrl?: string;
   imageUrl?: string;
+  emergency?: boolean;
+  emergencyLevel?: 'critical' | 'urgent' | null;
 }
 
-const BACKEND_URL = 'http://localhost:8000'; // FastAPI backend URL
+const BACKEND_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const AIDoctorConsole = () => {
+  const [sessionId] = useState(() => `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
   const [messages, setMessages] = useState<Message[]>([
     { 
       id: '1',
-      type: 'doctor', 
-      content: 'Hello! I\'m your AI Doctor. I can help you with medical consultations, analyze medical images, and provide voice responses. How can I assist you today?',
+      type: 'system', 
+      content: 'I\'m a medical information assistant. I can help provide information about symptoms, analyze medical images, and offer guidance. Please describe your symptoms or concerns.\n\n**Important:** I am not a doctor. This information does not replace professional medical evaluation.',
       timestamp: new Date()
     }
   ]);
@@ -64,7 +67,7 @@ const AIDoctorConsole = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const addMessage = useCallback((type: 'user' | 'doctor' | 'system', content: string, audioUrl?: string, imageUrl?: string) => {
+  const addMessage = useCallback((type: 'user' | 'doctor' | 'system' | 'emergency', content: string, audioUrl?: string, imageUrl?: string, emergency?: boolean, emergencyLevel?: 'critical' | 'urgent' | null) => {
     const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
     setMessages(prev => [...prev, {
       id,
@@ -72,6 +75,8 @@ const AIDoctorConsole = () => {
       content,
       audioUrl,
       imageUrl,
+      emergency,
+      emergencyLevel,
       timestamp: new Date()
     }]);
   }, []);
@@ -117,6 +122,7 @@ const AIDoctorConsole = () => {
     try {
       const formData = new FormData();
       formData.append('message', text);
+      formData.append('session_id', sessionId);
       formData.append('include_voice', 'false'); // Disable voice for speed
 
       // Add timeout for faster response handling
@@ -141,7 +147,8 @@ const AIDoctorConsole = () => {
       
       if (result.success) {
         const doctorResponse = result.response;
-        addMessage('doctor', doctorResponse);
+        const messageType = result.emergency ? 'emergency' : 'doctor';
+        addMessage(messageType, doctorResponse, undefined, undefined, result.emergency, result.emergency_level);
       } else {
         throw new Error(result.error || 'Unknown error');
       }
@@ -425,15 +432,17 @@ const AIDoctorConsole = () => {
 
   return (
     <div className="max-w-4xl mx-auto">
-      <Card className="shadow-xl border-0 bg-gradient-to-br from-blue-50 to-white">
-        <CardHeader className="bg-gradient-to-r from-blue-500 to-green-500 text-white rounded-t-lg">
+      <Card className="shadow-xl border-0" style={{ backgroundColor: '#FAFAFA' }}>
+        <CardHeader style={{ backgroundColor: '#2563EB' }} className="text-white rounded-t-lg">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <Stethoscope className="w-6 h-6" />
-              <CardTitle className="text-xl font-bold">AI Doctor Console</CardTitle>
+              <CardTitle className="text-xl" style={{ fontFamily: 'Inter, system-ui, sans-serif', fontWeight: 500 }}>
+                Medical Information Assistant
+              </CardTitle>
               {responseTime && (
-                <Badge variant="outline" className="text-xs">
-                  ⚡ {(responseTime / 1000).toFixed(1)}s
+                <Badge variant="outline" className="text-xs bg-white/20 border-white/30">
+                  {(responseTime / 1000).toFixed(1)}s
                 </Badge>
               )}
             </div>
@@ -441,42 +450,85 @@ const AIDoctorConsole = () => {
           </div>
         </CardHeader>
         
-        <CardContent className="p-6">
+        <CardContent className="p-6" style={{ backgroundColor: '#FAFAFA' }}>
           {backendStatus === 'offline' && (
-            <Alert className="mb-4 border-red-200 bg-red-50">
-              <AlertDescription className="text-red-800">
-                <strong>Backend Offline:</strong> The AI Doctor backend is not running. 
+            <Alert className="mb-4" style={{ backgroundColor: '#FEF2F2', borderColor: '#FCA5A5' }}>
+              <AlertDescription style={{ color: '#991B1B' }}>
+                <strong>Backend Offline:</strong> The medical information backend is not running. 
                 Please start the backend server to use the consultation features.
-                <div className="mt-2 text-sm">
-                  Run: <code className="bg-red-100 px-1 rounded">npm run dev:backend</code> or <code className="bg-red-100 px-1 rounded">npm run dev</code>
-                </div>
               </AlertDescription>
             </Alert>
           )}
 
           {/* Messages */}
-          <div className="h-96 overflow-y-auto mb-4 space-y-4 p-4 bg-gray-50 rounded-lg">
+          <div className="h-96 overflow-y-auto mb-4 space-y-4 p-4 bg-white rounded-lg border border-gray-200">
             {messages.map((message) => (
               <div key={message.id} className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
-                  message.type === 'user' 
-                    ? 'bg-blue-500 text-white' 
-                    : message.type === 'doctor'
-                    ? 'bg-green-100 text-gray-800 border border-green-200'
-                    : 'bg-yellow-100 text-gray-800 border border-yellow-200'
-                }`}>
+                <div 
+                  className={`max-w-xs lg:max-w-md px-4 py-3 rounded-lg shadow-sm ${
+                    message.type === 'user' 
+                      ? 'text-white' 
+                      : message.emergencyLevel === 'critical'
+                      ? 'border-4 text-gray-900 shadow-lg'
+                      : message.emergencyLevel === 'urgent'
+                      ? 'border-3 text-gray-900 shadow-md'
+                      : message.type === 'emergency'
+                      ? 'text-gray-900 border-2'
+                      : 'text-gray-900 border border-gray-200'
+                  }`}
+                  style={{
+                    backgroundColor: message.type === 'user' 
+                      ? '#2563EB'
+                      : message.emergencyLevel === 'critical'
+                      ? '#FEE2E2'
+                      : message.emergencyLevel === 'urgent'
+                      ? '#FEF3C7'
+                      : message.type === 'emergency'
+                      ? '#FEF3C7'
+                      : '#F9FAFB',
+                    borderColor: message.emergencyLevel === 'critical'
+                      ? '#DC2626'
+                      : message.emergencyLevel === 'urgent'
+                      ? '#F59E0B'
+                      : message.type === 'emergency'
+                      ? '#F59E0B'
+                      : '#E5E7EB',
+                    fontFamily: 'Inter, system-ui, sans-serif',
+                    borderWidth: message.emergencyLevel === 'critical' ? '4px' : message.emergencyLevel === 'urgent' ? '3px' : undefined
+                  }}
+                >
+                  {/* Enhanced Emergency Banner */}
+                  {message.emergencyLevel === 'critical' && (
+                    <div className="flex items-center gap-3 mb-3 p-3 bg-red-700 text-white rounded-md">
+                      <AlertTriangle className="w-7 h-7 flex-shrink-0" />
+                      <div>
+                        <div className="font-bold text-base">⚠️ CRITICAL MEDICAL EMERGENCY</div>
+                        <div className="text-xs mt-1">IMMEDIATE PROFESSIONAL EVALUATION REQUIRED</div>
+                      </div>
+                    </div>
+                  )}
+                  {message.emergencyLevel === 'urgent' && (
+                    <div className="flex items-center gap-3 mb-3 p-3 bg-amber-600 text-white rounded-md">
+                      <AlertTriangle className="w-6 h-6 flex-shrink-0" />
+                      <div>
+                        <div className="font-bold text-base">⚠️ URGENT MEDICAL SITUATION</div>
+                        <div className="text-xs mt-1">Seek medical attention within 24 hours</div>
+                      </div>
+                    </div>
+                  )}
                   {message.imageUrl && (
                     <img src={message.imageUrl} alt="Uploaded" className="max-w-full h-32 object-cover rounded mb-2" />
                   )}
-                  {message.type === 'doctor' ? (
+                  {message.type === 'doctor' || message.type === 'emergency' ? (
                     <div 
-                      className="text-sm max-w-none medical-response"
+                      className={`text-sm max-w-none medical-response ${message.emergencyLevel === 'critical' ? 'text-base' : ''}`}
                       dangerouslySetInnerHTML={{ 
                         __html: formatDoctorResponse(message.content) 
                       }} 
                       style={{
-                        lineHeight: '1.6',
-                        fontFamily: 'system-ui, -apple-system, sans-serif'
+                        lineHeight: message.emergencyLevel ? '1.7' : '1.6',
+                        fontFamily: 'system-ui, -apple-system, sans-serif',
+                        fontSize: message.emergencyLevel === 'critical' ? '15px' : undefined
                       }}
                     />
                   ) : (
@@ -505,8 +557,8 @@ const AIDoctorConsole = () => {
                     <Loader2 className="w-4 h-4 animate-spin" />
                     <span className="text-sm">
                       {loadingType === 'image' 
-                        ? 'AI Doctor is analyzing image... (60s max)' 
-                        : 'AI Doctor is analyzing... (15s max)'
+                        ? 'Analyzing image... (60s max)' 
+                        : 'Processing your information... (15s max)'
                       }
                     </span>
                   </div>

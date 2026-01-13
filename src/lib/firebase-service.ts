@@ -31,16 +31,21 @@ import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getAnalytics } from 'firebase/analytics';
 import { HealthMetrics } from './health-data-service';
 
-// Firebase configuration
+// Firebase configuration from environment variables
 const firebaseConfig = {
-  apiKey: "AIzaSyCZUyUgglbNRdDX5xfUJGrWCO9cDPpG_Gk",
-  authDomain: "predicare-ai.firebaseapp.com",
-  projectId: "predicare-ai",
-  storageBucket: "predicare-ai.firebasestorage.app",
-  messagingSenderId: "250196142010",
-  appId: "1:250196142010:web:8dc62bf92222a88de7df83",
-  measurementId: "G-J7QSHQN8K7"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
+
+// Validate Firebase configuration
+if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
+  console.warn('Firebase configuration is incomplete. Some features may not work.');
+}
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);

@@ -72,22 +72,9 @@ const LoginPage = () => {
     setError('');
 
     try {
-      // For demo purposes, accept any email with @ symbol and password 6+ characters
-      if (formData.email.includes('@') && formData.password.length >= 6) {
-        // Use the auth context to handle login
-        login(formData.email);
-        
-        // Check if user has completed profile
-        const hasProfile = localStorage.getItem('profileCompleted') === 'true';
-        
-        console.log('Login successful for:', formData.email);
-        console.log('Profile completed:', hasProfile);
-        
-        // Navigate to profile if incomplete, otherwise to dashboard
-        navigate(hasProfile ? '/' : '/profile');
-      } else {
-        setError('Invalid credentials. Please check your email and password.');
-      }
+      // Use Firebase authentication
+      await login(formData.email, formData.password);
+      // Navigation will happen via the useEffect when auth state updates
     } catch (error: any) {
       console.error('Login error:', error);
       setError(error.message || 'Failed to sign in. Please check your credentials.');
@@ -97,6 +84,20 @@ const LoginPage = () => {
   };
 
   const handleGoogleSignIn = async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      // TODO: Implement Google Sign-In
+      setError('Google Sign-In is not yet implemented');
+    } catch (error: any) {
+      setError(error.message || 'Failed to sign in with Google');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOldGoogleSignIn = async () => {
     setLoading(true);
     setError('');
 

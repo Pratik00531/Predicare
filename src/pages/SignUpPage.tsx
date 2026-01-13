@@ -10,7 +10,7 @@ import { useAuth } from '@/contexts/AuthContext';
 
 const SignUpPage = () => {
   const navigate = useNavigate();
-  const { login, isLoggedIn, user } = useAuth();
+  const { signup, isLoggedIn, user } = useAuth();
   const [formData, setFormData] = useState({
     displayName: '',
     email: '',
@@ -74,15 +74,11 @@ const SignUpPage = () => {
     setError('');
 
     try {
-      // For demo purposes, create account with provided credentials
-      login(formData.email);
-      
-      // Store the display name
-      localStorage.setItem('userDisplayName', formData.displayName);
-      
-      console.log('Account created for:', formData.email);
-      navigate('/profile');
+      // Use Firebase authentication
+      await signup(formData.email, formData.password, formData.displayName);
+      // Navigation will happen via the useEffect when auth state updates
     } catch (error: any) {
+      console.error('Signup error:', error);
       setError(error.message || 'Failed to create account');
     } finally {
       setLoading(false);
@@ -94,8 +90,22 @@ const SignUpPage = () => {
     setError('');
 
     try {
+      // TODO: Implement Google Sign-Up
+      setError('Google Sign-Up is not yet implemented');
+    } catch (error: any) {
+      setError(error.message || 'Failed to sign up with Google');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOldGoogleSignUp = async () => {
+    setLoading(true);
+    setError('');
+
+    try {
       // For demo purposes, simulate Google signup
-      login('demo@google.com');
+      login('demo@google.com', 'demopass');
       localStorage.setItem('userDisplayName', 'Demo User');
       
       console.log('Google signup successful');

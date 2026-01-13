@@ -5,8 +5,14 @@ load_dotenv()
 #Step1: Setup Audio recorder (ffmpeg & portaudio)
 # ffmpeg, portaudio, pyaudio
 import logging
-import speech_recognition as sr
-from pydub import AudioSegment
+try:
+    import speech_recognition as sr
+    from pydub import AudioSegment
+    SPEECH_RECOGNITION_AVAILABLE = True
+except ImportError:
+    SPEECH_RECOGNITION_AVAILABLE = False
+    print("⚠️ speech_recognition/pydub not installed - voice recording disabled")
+    
 from io import BytesIO
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -20,6 +26,9 @@ def record_audio(file_path, timeout=20, phrase_time_limit=None):
     timeout (int): Maximum time to wait for a phrase to start (in seconds).
     phrase_time_lfimit (int): Maximum time for the phrase to be recorded (in seconds).
     """
+    if not SPEECH_RECOGNITION_AVAILABLE:
+        raise ImportError("speech_recognition not installed - cannot record audio")
+        
     recognizer = sr.Recognizer()
     
     try:
