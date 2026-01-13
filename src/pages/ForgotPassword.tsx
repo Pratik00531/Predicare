@@ -1,83 +1,50 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Logo from "@/components/Logo";
 import { useToast } from "@/hooks/use-toast";
-import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
-
-type Step = "email" | "verify" | "newPassword";
+import { sendPasswordResetEmail } from "firebase/auth";
+import { auth } from "@/lib/firebase-service";
 
 export default function ForgotPassword() {
-  const navigate = useNavigate();
   const { toast } = useToast();
-  const [step, setStep] = useState<Step>("email");
   const [isLoading, setIsLoading] = useState(false);
   const [email, setEmail] = useState("");
-  const [otp, setOtp] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
+  const [emailSent, setEmailSent] = useState(false);
 
-  const handleSendOTP = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSendResetEmail = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setIsLoading(true);
 
     try {
-      const formData = new FormData();
-      formData.append("email", email);
-
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/auth/forgot-password`, {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to send reset code");
-      }
-
-      setStep("verify");
+      await sendPasswordResetEmail(auth, email);
+      
+      setEmailSent(true);
       toast({
-        title: "Code Sent",
-        description: "Check your email for the verification code.",
+        title: "Reset Email Sent",
+        description: "Check your email for a password reset link.",
       });
-    } catch (error) {
-      console.error("Send OTP error:", error);
+    } catch (error: any) {
+      console.error("Password reset error:", error);
+      
+      let errorMessage = "Failed to send reset email. Please try again.";
+      if (error.code === 'auth/user-not-found') {
+        errorMessage = "No account found with this email address.";
+      } else if (error.code === 'auth/invalid-email') {
+        errorMessage = "Invalid email address.";
+      }
+      
       toast({
         title: "Error",
-        description: "Failed to send reset code. Please try again.",
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {
       setIsLoading(false);
     }
   };
-
-  const handleVerifyOTP = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    
-    if (otp.length !== 6) {
-      toast({
-        title: "Invalid Code",
-        description: "Please enter the complete 6-digit code.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setStep("newPassword");
-  };
-
-  const handleResetPassword = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-
-    if (newPassword !== confirmPassword) {
-      toast({
-        title: "Passwords Don't Match",
-        description: "Please make sure both passwords are the same.",
-        variant: "destructive",
-      });
-      return;
     }
 
     if (newPassword.length < 6) {
@@ -137,15 +104,14 @@ export default function ForgotPassword() {
             Reset Your Password
           </h2>
           <p className="mt-2 text-sm text-gray-600">
-            {step === "email" && "Enter your email to receive a verification code"}
-            {step === "verify" && "Enter the 6-digit code sent to your email"}
-            {step === "newPassword" && "Create a new password for your account"}
+            {!emailSent 
+              ? "Enter your email to receive a password reset link"
+              : "Check your email for the reset link"}
           </p>
         </div>
 
-        {/* Step 1: Email Input */}
-        {step === "email" && (
-          <form onSubmit={handleSendOTP} className="mt-8 space-y-6">
+        {!emailSent ? (
+          <form onSubmit={handleSendResetEmail} className="mt-8 space-y-6">
             <div className="space-y-4">
               <div>
                 <Label htmlFor="email">Email Address</Label>
@@ -164,7 +130,7 @@ export default function ForgotPassword() {
             </div>
 
             <Button type="submit" className="w-full" disabled={isLoading}>
-              {isLoading ? "Sending..." : "Send Verification Code"}
+              {isLoading ? "Sending..." : "Send Reset Link"}
             </Button>
 
             <div className="text-center">
@@ -176,61 +142,39 @@ export default function ForgotPassword() {
               </Link>
             </div>
           </form>
-        )}
-
-        {/* Step 2: OTP Verification */}
-        {step === "verify" && (
-          <form onSubmit={handleVerifyOTP} className="mt-8 space-y-6">
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="otp" className="text-center block mb-4">
-                  Verification Code
-                </Label>
-                <div className="flex justify-center">
-                  <InputOTP
-                    maxLength={6}
-                    value={otp}
-                    onChange={(value) => setOtp(value)}
-                  >
-                    <InputOTPGroup>
-                      <InputOTPSlot index={0} />
-                      <InputOTPSlot index={1} />
-                      <InputOTPSlot index={2} />
-                      <InputOTPSlot index={3} />
-                      <InputOTPSlot index={4} />
-                      <InputOTPSlot index={5} />
-                    </InputOTPGroup>
-                  </InputOTP>
-                </div>
-                <p className="text-xs text-gray-500 text-center mt-2">
-                  Code sent to {email}
-                </p>
-              </div>
+        ) : (
+          <div className="mt-8 space-y-6">
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+              <p className="text-sm text-green-800 text-center">
+                📧 Password reset email sent to <strong>{email}</strong>
+              </p>
+              <p className="text-xs text-green-700 text-center mt-2">
+                Click the link in the email to reset your password
+              </p>
             </div>
 
-            <Button type="submit" className="w-full" disabled={otp.length !== 6}>
-              Verify Code
+            <Button 
+              onClick={() => setEmailSent(false)} 
+              variant="outline" 
+              className="w-full"
+            >
+              Resend Email
             </Button>
 
-            <div className="text-center space-y-2">
-              <button
-                type="button"
-                onClick={() => setStep("email")}
+            <div className="text-center">
+              <Link
+                to="/login"
                 className="text-sm text-blue-600 hover:text-blue-500"
               >
-                Change Email Address
-              </button>
+                Back to Sign In
+              </Link>
             </div>
-          </form>
+          </div>
         )}
-
-        {/* Step 3: New Password */}
-        {step === "newPassword" && (
-          <form onSubmit={handleResetPassword} className="mt-8 space-y-6">
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="newPassword">New Password</Label>
-                <Input
+      </div>
+    </div>
+  );
+}
                   id="newPassword"
                   name="newPassword"
                   type="password"
